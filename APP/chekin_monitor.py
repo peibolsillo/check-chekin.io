@@ -349,11 +349,12 @@ def get_token_via_browser(email: str, password: str) -> dict:
         except Exception as e:
             log.warning(f"Auto-submit falló, login manual: {e}")
 
-        # Esperar hasta 5 minutos a que el usuario complete login
-        log.info("Esperando login del usuario (timeout 5 min)…")
+        # Timeout: 90s en servidor (Xvfb), 5min en local con usuario humano
+        max_wait = 90 if xvfb_display is not None else 300
+        log.info(f"Esperando captura tokens (timeout {max_wait}s)…")
         cookies = []
         try:
-            deadline = time.time() + 300
+            deadline = time.time() + max_wait
             while time.time() < deadline:
                 if captured["access_token"]:
                     break
@@ -999,6 +1000,51 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
 api = ChekinAPIClient()
 
 
+def send_auth_failure_alert(error_msg: str) -> bool:
+    """Email alerta cuando token caduca y server no puede re-login solo."""
+    if not (EMAIL_SENDER and EMAIL_PASS and EMAIL_TO):
+        return False
+    import smtplib
+    from email.message import EmailMessage
+    msg = EmailMessage()
+    msg["Subject"] = "⚠️ Chekin Monitor — Token caducado, acción manual"
+    msg["From"]    = EMAIL_SENDER
+    msg["To"]      = EMAIL_TO
+    body = f"""El monitor no pudo refrescar el token automáticamente.
+
+Error: {error_msg}
+
+ACCIÓN REQUERIDA (en tu PC LOCAL con monitor):
+
+  1. cd C:\\Users\\pmora\\chekin.com\\APP2  (o APP)
+  2. Editar .env: HEADLESS=false
+  3. Borrar tokens viejos: del chekin_tokens*.json
+  4. python chekin-monitor-mati.py  (o chekin_monitor.py)
+  5. Chrome abre, login se completa, tokens guardados.
+  6. Copiar al servidor:
+       scp chekin_tokens*.json root@servidor:/opt/app-mati/  (o /opt/app/)
+  7. systemctl restart chekin-monitor-mati  (o chekin-monitor)
+
+Mientras tanto el monitor reintentará cada 30 min sin éxito.
+"""
+    msg.set_content(body)
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
+            s.ehlo(); s.starttls()
+            s.login(EMAIL_SENDER, EMAIL_PASS.replace(" ", ""))
+            s.send_message(msg)
+        log.info(f"📧 Alerta auth enviada a {EMAIL_TO}")
+        return True
+    except Exception as e:
+        log.error(f"No pude enviar alerta auth: {e}")
+        return False
+
+
+# Throttle alertas (no spammear cada 30 min)
+_LAST_ALERT_TS = 0
+_ALERT_COOLDOWN_SEC = 6 * 3600  # 6h
+
+
 def run_check():
     log.info("─" * 50)
     log.info("Iniciando consulta…")
@@ -1061,6 +1107,14 @@ def run_check():
 
     except Exception as e:
         log.exception(f"Error en la consulta: {e}")
+        # Si es fallo de auth (token expirado + no se pudo re-login) → email alerta throttled
+        msg = str(e).lower()
+        if any(k in msg for k in ["token", "auth", "xvfb", "display", "playwright", "login"]):
+            global _LAST_ALERT_TS
+            now = time.time()
+            if now - _LAST_ALERT_TS > _ALERT_COOLDOWN_SEC:
+                send_auth_failure_alert(str(e)[:400])
+                _LAST_ALERT_TS = now
 
 
 # ──────────────────────────────────────────────────────────────────────────────
