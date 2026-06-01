@@ -180,12 +180,25 @@ def get_token_via_browser(email: str, password: str) -> dict:
             "Ejecuta:  pip install playwright && playwright install chromium"
         )
 
-    if HEADLESS:
-        raise RuntimeError(
-            "HEADLESS=true: sin display para login interactivo. "
-            "Captura tokens en máquina local (HEADLESS=false), "
-            "luego copia chekin_tokens_mati.json al servidor."
-        )
+    # Display virtual Xvfb si servidor sin pantalla — login auto sin captura local
+    xvfb_display = None
+    if not os.environ.get("DISPLAY"):
+        try:
+            from pyvirtualdisplay import Display
+            xvfb_display = Display(visible=False, size=(1280, 900))
+            xvfb_display.start()
+            log.info(f"🖥️  Xvfb iniciado (DISPLAY={os.environ.get('DISPLAY')})")
+        except ImportError:
+            raise RuntimeError(
+                "Sin DISPLAY y sin pyvirtualdisplay. En servidor instala:\n"
+                "  apt install -y xvfb\n"
+                "  pip install pyvirtualdisplay"
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"No pude iniciar Xvfb: {e}\n"
+                f"Comprueba: apt install -y xvfb"
+            )
 
     log.info("=" * 70)
     log.info("Abriendo Chrome para login manual en Chekin.")
@@ -345,6 +358,12 @@ def get_token_via_browser(email: str, password: str) -> dict:
             except Exception:
                 pass
             log.info("🪟 Navegador cerrado.")
+            if xvfb_display is not None:
+                try:
+                    xvfb_display.stop()
+                    log.info("🖥️  Xvfb detenido.")
+                except Exception:
+                    pass
 
     if not captured["access_token"]:
         raise RuntimeError(

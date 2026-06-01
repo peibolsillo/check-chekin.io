@@ -73,6 +73,7 @@ apt-get update -qq
 apt-get install -y -qq \
     git curl wget ca-certificates tzdata sudo nano \
     python3 python3-venv python3-pip \
+    xvfb xauth \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
     libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
@@ -124,7 +125,7 @@ install_app() {
     source venv/bin/activate
     pip install --upgrade pip --quiet
     blue "    [5/7] Instalando paquetes Python…"
-    pip install --quiet playwright requests python-dotenv schedule
+    pip install --quiet playwright requests python-dotenv schedule pyvirtualdisplay
 
     blue "    [6/7] Instalando Chromium para Playwright…"
     playwright install chromium
