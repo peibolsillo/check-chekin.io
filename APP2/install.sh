@@ -22,13 +22,21 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
     python3 python3-venv python3-pip \
-    xvfb xauth \
+    xvfb xauth x11vnc xterm \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
     libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
     libxshmfence1 libgtk-3-0 \
     fonts-liberation fonts-noto-color-emoji \
     curl wget ca-certificates tzdata
+
+if ! command -v google-chrome >/dev/null 2>&1; then
+    echo "Instalando Google Chrome stable…"
+    wget -qO /tmp/chrome.deb \
+        https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+    apt-get install -y -qq /tmp/chrome.deb || apt-get -f install -y -qq
+    rm -f /tmp/chrome.deb
+fi
 
 echo "[2/5] Creando venv Python…"
 python3 -m venv venv
@@ -37,6 +45,7 @@ source venv/bin/activate
 pip install --upgrade pip --quiet
 echo "[3/5] Instalando paquetes Python…"
 pip install --quiet playwright requests python-dotenv schedule pyvirtualdisplay playwright-stealth
+pip install --quiet patchright || echo "    patchright opcional no instalado"
 
 echo "[4/5] Descargando Chromium para Playwright…"
 playwright install chromium

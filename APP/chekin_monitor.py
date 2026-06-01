@@ -43,12 +43,19 @@ import requests
 import schedule
 from dotenv import load_dotenv
 
-# ── Playwright (importación diferida para mejor gestión de errores) ──────────
+# ── Playwright / Patchright (drop-in mejor anti-detect Cloudflare) ─────
+PW_BACKEND = None
 try:
-    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+    from patchright.sync_api import sync_playwright, TimeoutError as PWTimeout
+    PW_BACKEND = "patchright"
     PLAYWRIGHT_OK = True
 except ImportError:
-    PLAYWRIGHT_OK = False
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+        PW_BACKEND = "playwright"
+        PLAYWRIGHT_OK = True
+    except ImportError:
+        PLAYWRIGHT_OK = False
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuración
@@ -177,7 +184,7 @@ def get_token_via_browser(email: str, password: str) -> dict:
             "Ejecuta:  pip install playwright && playwright install chromium"
         )
 
-    # Display virtual Xvfb si servidor sin pantalla — permite login auto
+    # Linux server sin DISPLAY → arranca Xvfb virtual
     xvfb_display = None
     if not os.environ.get("DISPLAY"):
         try:
@@ -187,66 +194,52 @@ def get_token_via_browser(email: str, password: str) -> dict:
             log.info(f"🖥️  Xvfb iniciado (DISPLAY={os.environ.get('DISPLAY')})")
         except ImportError:
             raise RuntimeError(
-                "Sin DISPLAY y sin pyvirtualdisplay. En servidor instala:\n"
-                "  apt install -y xvfb\n"
-                "  pip install pyvirtualdisplay"
-            )
-        except Exception as e:
-            raise RuntimeError(
-                f"No pude iniciar Xvfb: {e}\n"
-                f"Comprueba: apt install -y xvfb"
+                "Sin DISPLAY y sin pyvirtualdisplay.\n"
+                "  apt install -y xvfb && pip install pyvirtualdisplay"
             )
 
+    # Perfil persistente: cf_clearance Cloudflare sobrevive entre runs
+    profile_dir = str(Path("./chrome_profile").resolve())
+    Path(profile_dir).mkdir(exist_ok=True)
+
     log.info("=" * 70)
-    log.info("Abriendo Chrome para login manual en Chekin.")
-    log.info("INSTRUCCIONES:")
-    log.info("  1. Se abre ventana Chrome con la página de login.")
-    log.info("  2. Introduce tus credenciales y completa Cloudflare si aparece.")
-    log.info("  3. El script detectará automáticamente cuando entres al dashboard.")
-    log.info("  4. NO cierres la ventana, se cerrará sola.")
+    log.info(f"Backend: {PW_BACKEND}  |  Perfil: {profile_dir}")
+    log.info("Abriendo Chrome para login en Chekin.")
     log.info("=" * 70)
     captured = {"access_token": None, "refresh_token": None}
 
     with sync_playwright() as pw:
+        # launch_persistent_context con Chrome real (channel="chrome") + profile
         try:
-            browser = pw.chromium.launch(
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=profile_dir,
                 headless=False,
                 channel="chrome",
-                args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
+                args=["--ignore-certificate-errors",
+                      "--disable-blink-features=AutomationControlled",
+                      "--no-sandbox"],
+                viewport={"width": 1280, "height": 900},
+                locale="es-ES",
+                ignore_https_errors=True,
             )
-        except Exception:
-            browser = pw.chromium.launch(
+        except Exception as e:
+            log.warning(f"channel=chrome falló ({e}), fallback chromium bundled")
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=profile_dir,
                 headless=False,
-                args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
+                args=["--ignore-certificate-errors",
+                      "--disable-blink-features=AutomationControlled",
+                      "--no-sandbox"],
+                viewport={"width": 1280, "height": 900},
+                locale="es-ES",
+                ignore_https_errors=True,
             )
 
-        context = browser.new_context(
-            ignore_https_errors=True,
-            viewport={"width": 1280, "height": 900},
-            locale="es-ES",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/148.0.0.0 Safari/537.36"
-            ),
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
-        # Anti-bot init scripts (sobrescribe propiedades detectables)
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'languages', {get: () => ['es-ES','es','en-US','en']});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-            window.chrome = {runtime: {}};
-        """)
         page = context.new_page()
-        # Stealth opcional
-        try:
-            from playwright_stealth import stealth_sync
-            stealth_sync(page)
-            log.info("🥷 playwright-stealth aplicado.")
-        except ImportError:
-            pass
-        except Exception as e:
-            log.warning(f"stealth no aplicado: {e}")
+        browser = None  # placeholder — persistent context maneja todo
 
         # Interceptar respuesta de login/exchange — captura tokens automáticamente
         def on_response(response):
@@ -306,44 +299,17 @@ def get_token_via_browser(email: str, password: str) -> dict:
                 break
 
         if not turnstile_ok:
-            log.warning("Turnstile no completó. Forzando display + fill agresivo.")
-            # Fuerza container visible
-            try:
-                page.evaluate("""() => {
-                    document.querySelectorAll('.erf-container').forEach(el => {
-                        el.style.display = 'block';
-                        el.style.visibility = 'visible';
-                        el.style.opacity = '1';
-                    });
-                    const lf = document.querySelector('.erf-login-form');
-                    if (lf) {
-                        lf.style.display = 'block';
-                        lf.style.visibility = 'visible';
-                    }
-                }""")
-                page.wait_for_timeout(500)
-            except Exception as e:
-                log.warning(f"Force display fallo: {e}")
+            log.warning("Turnstile no completó. Login puede fallar — pulsa manual si hace falta.")
 
         # Auto-fill + auto-submit si tenemos credenciales
         try:
             if email and password:
-                log.info("Auto-fill credenciales (force=True si invisible)…")
-                page.locator("#erf_username").first.fill(email, force=True, timeout=10_000)
-                page.locator("#erf_password").first.fill(password, force=True, timeout=10_000)
+                log.info("Auto-fill credenciales…")
+                page.locator("#erf_username").first.fill(email)
+                page.locator("#erf_password").first.fill(password)
                 page.wait_for_timeout(800)
-                log.info("Auto-submit (jQuery + requestSubmit + click)…")
-                page.evaluate("""() => {
-                    const f = document.querySelector('.erf-login-form');
-                    if (!f) return;
-                    if (window.jQuery) {
-                        try { window.jQuery(f).trigger('submit'); } catch(e){}
-                        try { window.jQuery(f).submit();         } catch(e){}
-                    }
-                    try { f.requestSubmit(); } catch(e){}
-                    const btn = f.querySelector('button[type="submit"]');
-                    if (btn) btn.click();
-                }""")
+                log.info("Auto-click Login…")
+                page.locator(".erf-login-form button[type='submit']").first.click()
             else:
                 log.info("Sin credenciales en .env. Login manual requerido.")
         except Exception as e:
@@ -398,10 +364,6 @@ def get_token_via_browser(email: str, password: str) -> dict:
                 context.close()
             except Exception:
                 pass
-            try:
-                browser.close()
-            except Exception:
-                pass
             log.info("🪟 Navegador cerrado.")
             if xvfb_display is not None:
                 try:
@@ -412,7 +374,7 @@ def get_token_via_browser(email: str, password: str) -> dict:
 
     if not captured["access_token"]:
         raise RuntimeError(
-            "Timeout esperando login manual (5 min). Inténtalo de nuevo."
+            "Timeout esperando login (5 min). Inténtalo de nuevo."
         )
 
     return {
