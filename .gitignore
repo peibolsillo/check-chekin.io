@@ -21,9 +21,13 @@ venv/
 .Python
 *.egg-info/
 
-# Playwright cache
+# Playwright cache + perfil persistente
 .playwright/
 playwright-report/
+chrome_profile/
+chrome_profile_mati/
+*/chrome_profile/
+*/chrome_profile_mati/
 
 # Debug / inspección locales (no en repo)
 inspect*.py

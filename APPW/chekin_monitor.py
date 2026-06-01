@@ -181,39 +181,48 @@ def get_token_via_browser(email: str, password: str) -> dict:
     xvfb_display = None
 
     log.info("=" * 70)
-    log.info("Abriendo Chrome para login manual en Chekin.")
+    log.info("Abriendo Chrome para captura tokens Chekin.")
     log.info("INSTRUCCIONES:")
-    log.info("  1. Se abre ventana Chrome con la página de login.")
-    log.info("  2. Introduce tus credenciales y completa Cloudflare si aparece.")
-    log.info("  3. El script detectará automáticamente cuando entres al dashboard.")
-    log.info("  4. NO cierres la ventana, se cerrará sola.")
+    log.info("  1. Si aparece checkbox 'Verifica que eres humano' → CLÍCALO MANUAL.")
+    log.info("     (solo primera vez — el perfil persiste cf_clearance).")
+    log.info("  2. Login y submit son automáticos.")
+    log.info("  3. Ventana se cierra sola tras capturar tokens.")
     log.info("=" * 70)
     captured = {"access_token": None, "refresh_token": None}
 
     with sync_playwright() as pw:
+        # Perfil persistente — guarda cf_clearance Cloudflare entre ejecuciones
+        # Tras pasar Turnstile manual primera vez, futuras corridas lo saltan
+        profile_dir = str(Path("./chrome_profile").resolve())
+        Path(profile_dir).mkdir(exist_ok=True)
+        log.info(f"📂 Perfil persistente: {profile_dir}")
+        browser = None  # marcador para finally — usamos context para todo
+
         try:
-            browser = pw.chromium.launch(
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=profile_dir,
                 headless=False,
                 channel="chrome",
                 args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
+                viewport={"width": 1280, "height": 900},
+                locale="es-ES",
+                ignore_https_errors=True,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/148.0.0.0 Safari/537.36"
+                ),
             )
         except Exception:
-            browser = pw.chromium.launch(
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=profile_dir,
                 headless=False,
                 args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
+                viewport={"width": 1280, "height": 900},
+                locale="es-ES",
+                ignore_https_errors=True,
             )
 
-        context = browser.new_context(
-            ignore_https_errors=True,
-            viewport={"width": 1280, "height": 900},
-            locale="es-ES",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/148.0.0.0 Safari/537.36"
-            ),
-        )
-        # Anti-bot init scripts (sobrescribe propiedades detectables)
         context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
             Object.defineProperty(navigator, 'languages', {get: () => ['es-ES','es','en-US','en']});
@@ -221,7 +230,6 @@ def get_token_via_browser(email: str, password: str) -> dict:
             window.chrome = {runtime: {}};
         """)
         page = context.new_page()
-        # Stealth opcional
         try:
             from playwright_stealth import stealth_sync
             stealth_sync(page)
@@ -381,17 +389,7 @@ def get_token_via_browser(email: str, password: str) -> dict:
                 context.close()
             except Exception:
                 pass
-            try:
-                browser.close()
-            except Exception:
-                pass
             log.info("🪟 Navegador cerrado.")
-            if xvfb_display is not None:
-                try:
-                    xvfb_display.stop()
-                    log.info("🖥️  Xvfb detenido.")
-                except Exception:
-                    pass
 
     if not captured["access_token"]:
         raise RuntimeError(
