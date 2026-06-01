@@ -35,8 +35,13 @@ files.zip
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *~
+
+# Working copy raíz (canonical en APP/)
+/chekin_monitor.py
+/debug_guests.py
 
 # OS
 Thumbs.db
