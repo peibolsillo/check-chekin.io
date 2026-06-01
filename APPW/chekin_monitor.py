@@ -181,63 +181,36 @@ def get_token_via_browser(email: str, password: str) -> dict:
     xvfb_display = None
 
     log.info("=" * 70)
-    log.info("Abriendo Chrome para captura tokens Chekin.")
+    log.info("Abriendo Chrome para login en Chekin.")
     log.info("INSTRUCCIONES:")
-    log.info("  1. Si aparece checkbox 'Verifica que eres humano' → CLÍCALO MANUAL.")
-    log.info("     (solo primera vez — el perfil persiste cf_clearance).")
-    log.info("  2. Login y submit son automáticos.")
+    log.info("  1. Se abre ventana Chrome.")
+    log.info("  2. Login auto-completa si Cloudflare auto-pasa.")
     log.info("  3. Ventana se cierra sola tras capturar tokens.")
     log.info("=" * 70)
     captured = {"access_token": None, "refresh_token": None}
 
     with sync_playwright() as pw:
-        # Perfil persistente — guarda cf_clearance Cloudflare entre ejecuciones
-        # Tras pasar Turnstile manual primera vez, futuras corridas lo saltan
-        profile_dir = str(Path("./chrome_profile").resolve())
-        Path(profile_dir).mkdir(exist_ok=True)
-        log.info(f"📂 Perfil persistente: {profile_dir}")
-        browser = None  # marcador para finally — usamos context para todo
-
         try:
-            context = pw.chromium.launch_persistent_context(
-                user_data_dir=profile_dir,
+            browser = pw.chromium.launch(
                 headless=False,
                 channel="chrome",
                 args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
-                viewport={"width": 1280, "height": 900},
-                locale="es-ES",
-                ignore_https_errors=True,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/148.0.0.0 Safari/537.36"
-                ),
             )
         except Exception:
-            context = pw.chromium.launch_persistent_context(
-                user_data_dir=profile_dir,
+            browser = pw.chromium.launch(
                 headless=False,
                 args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
-                viewport={"width": 1280, "height": 900},
-                locale="es-ES",
-                ignore_https_errors=True,
             )
 
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'languages', {get: () => ['es-ES','es','en-US','en']});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-            window.chrome = {runtime: {}};
-        """)
+        context = browser.new_context(
+            ignore_https_errors=True,
+            viewport={"width": 1280, "height": 900},
+            locale="es-ES",
+        )
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+        )
         page = context.new_page()
-        try:
-            from playwright_stealth import stealth_sync
-            stealth_sync(page)
-            log.info("🥷 playwright-stealth aplicado.")
-        except ImportError:
-            pass
-        except Exception as e:
-            log.warning(f"stealth no aplicado: {e}")
 
         # Interceptar respuesta de login/exchange — captura tokens automáticamente
         def on_response(response):
@@ -297,44 +270,17 @@ def get_token_via_browser(email: str, password: str) -> dict:
                 break
 
         if not turnstile_ok:
-            log.warning("Turnstile no completó. Forzando display + fill agresivo.")
-            # Fuerza container visible
-            try:
-                page.evaluate("""() => {
-                    document.querySelectorAll('.erf-container').forEach(el => {
-                        el.style.display = 'block';
-                        el.style.visibility = 'visible';
-                        el.style.opacity = '1';
-                    });
-                    const lf = document.querySelector('.erf-login-form');
-                    if (lf) {
-                        lf.style.display = 'block';
-                        lf.style.visibility = 'visible';
-                    }
-                }""")
-                page.wait_for_timeout(500)
-            except Exception as e:
-                log.warning(f"Force display fallo: {e}")
+            log.warning("Turnstile no completó. Login puede fallar — pulsa manual si hace falta.")
 
         # Auto-fill + auto-submit si tenemos credenciales
         try:
             if email and password:
-                log.info("Auto-fill credenciales (force=True si invisible)…")
-                page.locator("#erf_username").first.fill(email, force=True, timeout=10_000)
-                page.locator("#erf_password").first.fill(password, force=True, timeout=10_000)
+                log.info("Auto-fill credenciales…")
+                page.locator("#erf_username").first.fill(email)
+                page.locator("#erf_password").first.fill(password)
                 page.wait_for_timeout(800)
-                log.info("Auto-submit (jQuery + requestSubmit + click)…")
-                page.evaluate("""() => {
-                    const f = document.querySelector('.erf-login-form');
-                    if (!f) return;
-                    if (window.jQuery) {
-                        try { window.jQuery(f).trigger('submit'); } catch(e){}
-                        try { window.jQuery(f).submit();         } catch(e){}
-                    }
-                    try { f.requestSubmit(); } catch(e){}
-                    const btn = f.querySelector('button[type="submit"]');
-                    if (btn) btn.click();
-                }""")
+                log.info("Auto-click Login…")
+                page.locator(".erf-login-form button[type='submit']").first.click()
             else:
                 log.info("Sin credenciales en .env. Login manual requerido.")
         except Exception as e:
@@ -387,6 +333,10 @@ def get_token_via_browser(email: str, password: str) -> dict:
         finally:
             try:
                 context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
             except Exception:
                 pass
             log.info("🪟 Navegador cerrado.")
