@@ -40,7 +40,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip --quiet
 echo "[3/5] Instalando paquetes Python…"
-pip install --quiet playwright requests python-dotenv schedule pyvirtualdisplay
+pip install --quiet playwright requests python-dotenv schedule pyvirtualdisplay playwright-stealth
 
 # ── 4. Chromium Playwright ───────────────────────────────────────
 echo "[4/5] Descargando Chromium para Playwright…"

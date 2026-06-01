@@ -125,7 +125,7 @@ install_app() {
     source venv/bin/activate
     pip install --upgrade pip --quiet
     blue "    [5/7] Instalando paquetes Python…"
-    pip install --quiet playwright requests python-dotenv schedule pyvirtualdisplay
+    pip install --quiet playwright requests python-dotenv schedule pyvirtualdisplay playwright-stealth
 
     blue "    [6/7] Instalando Chromium para Playwright…"
     playwright install chromium

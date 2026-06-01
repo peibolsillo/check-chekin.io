@@ -224,11 +224,29 @@ def get_token_via_browser(email: str, password: str) -> dict:
             ignore_https_errors=True,
             viewport={"width": 1280, "height": 900},
             locale="es-ES",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/148.0.0.0 Safari/537.36"
+            ),
         )
-        context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
+        # Anti-bot init scripts (sobrescribe propiedades detectables)
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'languages', {get: () => ['es-ES','es','en-US','en']});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+            window.chrome = {runtime: {}};
+        """)
         page = context.new_page()
+        # Stealth opcional
+        try:
+            from playwright_stealth import stealth_sync
+            stealth_sync(page)
+            log.info("🥷 playwright-stealth aplicado.")
+        except ImportError:
+            pass
+        except Exception as e:
+            log.warning(f"stealth no aplicado: {e}")
 
         # Interceptar respuesta de login/exchange — captura tokens automáticamente
         def on_response(response):
@@ -288,17 +306,44 @@ def get_token_via_browser(email: str, password: str) -> dict:
                 break
 
         if not turnstile_ok:
-            log.warning("Turnstile no completó. Login puede fallar — pulsa manual si hace falta.")
+            log.warning("Turnstile no completó. Forzando display + fill agresivo.")
+            # Fuerza container visible
+            try:
+                page.evaluate("""() => {
+                    document.querySelectorAll('.erf-container').forEach(el => {
+                        el.style.display = 'block';
+                        el.style.visibility = 'visible';
+                        el.style.opacity = '1';
+                    });
+                    const lf = document.querySelector('.erf-login-form');
+                    if (lf) {
+                        lf.style.display = 'block';
+                        lf.style.visibility = 'visible';
+                    }
+                }""")
+                page.wait_for_timeout(500)
+            except Exception as e:
+                log.warning(f"Force display fallo: {e}")
 
         # Auto-fill + auto-submit si tenemos credenciales
         try:
             if email and password:
-                log.info("Auto-fill credenciales…")
-                page.locator("#erf_username").first.fill(email)
-                page.locator("#erf_password").first.fill(password)
-                page.wait_for_timeout(800)  # pequeña pausa anti-bot
-                log.info("Auto-click Login…")
-                page.locator(".erf-login-form button[type='submit']").first.click()
+                log.info("Auto-fill credenciales (force=True si invisible)…")
+                page.locator("#erf_username").first.fill(email, force=True, timeout=10_000)
+                page.locator("#erf_password").first.fill(password, force=True, timeout=10_000)
+                page.wait_for_timeout(800)
+                log.info("Auto-submit (jQuery + requestSubmit + click)…")
+                page.evaluate("""() => {
+                    const f = document.querySelector('.erf-login-form');
+                    if (!f) return;
+                    if (window.jQuery) {
+                        try { window.jQuery(f).trigger('submit'); } catch(e){}
+                        try { window.jQuery(f).submit();         } catch(e){}
+                    }
+                    try { f.requestSubmit(); } catch(e){}
+                    const btn = f.querySelector('button[type="submit"]');
+                    if (btn) btn.click();
+                }""")
             else:
                 log.info("Sin credenciales en .env. Login manual requerido.")
         except Exception as e:
