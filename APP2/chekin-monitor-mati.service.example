@@ -1,0 +1,17 @@
+[Unit]
+Description=Chekin Monitor (Mati - Villa Brisa)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/check-chekin.io/APP2
+ExecStart=/opt/check-chekin.io/APP2/venv/bin/python /opt/check-chekin.io/APP2/chekin-monitor-mati.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/var/log/chekin-monitor-mati.log
+StandardError=append:/var/log/chekin-monitor-mati.log
+
+[Install]
+WantedBy=multi-user.target

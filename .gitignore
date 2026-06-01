@@ -1,0 +1,43 @@
+# Credenciales y tokens
+.env
+*/.env
+chekin_tokens*.json
+*/chekin_tokens*.json
+
+# Estado y reports runtime
+chekin_state*.json
+chekin_report*.json
+chekin_history*.json
+chekin_debug*.png
+*.json.bk
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+*/venv/
+.Python
+*.egg-info/
+
+# Playwright cache
+.playwright/
+playwright-report/
+
+# Debug / inspección locales (no en repo)
+inspect*.py
+parse_har*.py
+files.zip
+*.har
+*.png
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+Thumbs.db
+.DS_Store

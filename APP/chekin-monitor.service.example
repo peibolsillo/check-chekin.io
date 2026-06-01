@@ -1,0 +1,17 @@
+[Unit]
+Description=Chekin Monitor (main)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/check-chekin.io/APP
+ExecStart=/opt/check-chekin.io/APP/venv/bin/python /opt/check-chekin.io/APP/chekin_monitor.py
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/var/log/chekin-monitor.log
+StandardError=append:/var/log/chekin-monitor.log
+
+[Install]
+WantedBy=multi-user.target
