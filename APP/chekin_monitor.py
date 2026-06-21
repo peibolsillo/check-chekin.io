@@ -914,9 +914,10 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
                 f'<div style="background:{card_bg};border-left:4px solid {card_bdr};'
                 f'padding:12px 14px;margin-bottom:2px;">'
             )
+            portal = r.get("fuente") or "—"
             html_parts.append(
                 f'<div style="font-size:14px;font-weight:bold;margin-bottom:6px;">'
-                f'📋 {_html.escape(r["id"][:8])}… '
+                f'📋 {_html.escape(portal)} '
                 f'<span style="background:{status_color};color:#fff;font-size:11px;'
                 f'padding:2px 8px;border-radius:10px;font-weight:normal;">'
                 f'{_html.escape(r["estado"])}</span>{tags_html}</div>'
@@ -936,8 +937,7 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
             guest_mb = "6px" if r.get("huespedes") else "0"
             html_parts.append(
                 f'<div style="font-size:13px;color:#555;margin-bottom:{guest_mb};">'
-                f'👤 {_html.escape(r.get("guest_leader","—"))} &nbsp;·&nbsp; '
-                f'🔖 {_html.escape(r.get("booking_ref","—"))}</div>'
+                f'👤 {_html.escape(r.get("guest_leader","—"))}</div>'
             )
             for h in r.get("huespedes", []):
                 em       = TIPO_EMOJI.get(h["tipo"], "?")
