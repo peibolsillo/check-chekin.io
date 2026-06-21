@@ -264,7 +264,7 @@ def get_token_via_browser(email: str, password: str) -> dict:
         for _ in range(30):
             page.wait_for_timeout(1_000)
             v = page.evaluate("""() => {
-                const el = document.querySelector('input[name=\"cf-turnstile-response\"], textarea[name=\"cf-turnstile-response\"]');
+                const el = document.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
                 return el ? (el.value || '').length : 0;
             }""")
             if v and v > 100:
@@ -475,7 +475,7 @@ class ChekinAPIClient:
 
     def get_guest_group(self, guest_group_id: str) -> dict:
         """Devuelve metadatos del grupo: adults, children, known/added counts."""
-        if not guest_group_id:
+        if not guest_group_id:  
             return {}
         try:
             return self.get(f"/guest-groups/{guest_group_id}/")
@@ -747,7 +747,7 @@ def print_report(report: dict):
 # Email summary via SMTP Gmail
 # ──────────────────────────────────────────────────────────────────────────────
 def _build_reservation_lines(r: dict) -> list:
-    """Devuelve lista líneas (sin escape HTML) para una reserva."""
+    """Devuelve lista líneas de texto plano para una reserva."""
     s = r["resumen"]
     out = [
         f"  📋 {r['id'][:8]}…  │  "
@@ -758,8 +758,6 @@ def _build_reservation_lines(r: dict) -> list:
         f"       Titular: {r.get('guest_leader','—')}  │  "
         f"Fuente: {r.get('fuente','—')}  │  Ref: {r.get('booking_ref','—')}",
     ]
-    if r.get("signup_link"):
-        out.append(f"       Link form: {r['signup_link']}")
     for h in r.get("huespedes", []):
         em   = TIPO_EMOJI.get(h["tipo"], "?")
         edad = f"{h['edad']}a" if h.get("edad") is not None else "? a"
@@ -770,30 +768,9 @@ def _build_reservation_lines(r: dict) -> list:
     return out
 
 
-def _highlight_block(escaped: str) -> str:
-    """Aplica bebé-rojo + url-link a HTML ya escapado."""
-    escaped = re.sub(
-        r"(https?://[^\s<]+)",
-        r'<a href="\1" style="color:#1a73e8;text-decoration:underline;">\1</a>',
-        escaped,
-    )
-    escaped = re.sub(
-        r"(^.*👶 BEBÉ.*$)",
-        r'<span style="color:#d93025;font-weight:bold;">\1</span>',
-        escaped,
-        flags=re.MULTILINE,
-    )
-    escaped = re.sub(
-        r"(Bebés:\s*)([1-9]\d*)",
-        r'\1<span style="color:#d93025;font-weight:bold;">\2</span>',
-        escaped,
-    )
-    return escaped
-
-
 def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     """
-    Envía resumen vía SMTP Gmail.
+    Envía resumen vía SMTP Gmail con diseño responsive para móvil.
       mark_ids: ids reservas que dispararon cambio (verde)
       Reserva más próxima (check_in >= hoy más cercana) → marco amarillo
       Huéspedes BEBÉ → rojo
@@ -853,46 +830,112 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     lines.append(sep)
     body_text = "\n".join(lines)
 
-    # ── Construir HTML bloque-a-bloque para estilar reservas ────────────
-    html = [
-        '<html><body style="margin:0;padding:8px;background:#fff;'
-        'font-family:Consolas,Menlo,monospace;font-size:13px;line-height:1.4;color:#111;">',
-        f'<pre style="margin:0;">{_html.escape(sep)}\n'
-        f'  CHEKIN.IO  │  {_html.escape(generado)}  │  {total} reservas\n'
-        f'{_html.escape(sep)}</pre>',
+    # ── Construir HTML responsive para móvil ────────────────────────────
+    html_parts = [
+        '<!DOCTYPE html><html><head>'
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
+        '</head>'
+        '<body style="margin:0;padding:0;background:#f4f4f4;'
+        'font-family:Arial,Helvetica,sans-serif;color:#222;">'
+        '<div style="max-width:580px;margin:0 auto;padding:8px 4px;">'
     ]
+    html_parts.append(
+        f'<div style="background:#1a73e8;color:#fff;padding:14px 16px;'
+        f'border-radius:8px 8px 0 0;">'
+        f'<div style="font-size:17px;font-weight:bold;">🏨 CHEKIN.IO</div>'
+        f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">'
+        f'{_html.escape(generado)} &nbsp;·&nbsp; {total} reservas</div>'
+        f'</div>'
+    )
     for apt, reservas in apts.items():
-        html.append(
-            f'<pre style="margin:10px 0 0;">\n  🏠  {_html.escape(apt)}\n'
-            f'  {"─"*66}</pre>'
+        html_parts.append(
+            f'<div style="background:#e8f0fe;padding:9px 14px;font-weight:bold;'
+            f'font-size:14px;margin-top:10px;">'
+            f'🏠 {_html.escape(apt)}</div>'
         )
         for r in reservas:
-            block_lines = _build_reservation_lines(r)
-            block_text  = "\n".join(block_lines)
-            esc         = _highlight_block(_html.escape(block_text))
+            s = r["resumen"]
+            is_marked  = r["id"] in mark_ids
+            is_nearest = r["id"] in nearest_ids
 
-            style = "margin:0;padding:2px 4px;"
-            if r["id"] in mark_ids:
-                style += ("background:#e6f4ea;border-left:4px solid #34a853;"
-                          "padding:6px 8px;margin:4px 0;")
-            elif r["id"] in nearest_ids:
-                style += ("background:#fef7e0;border:2px solid #f9ab00;"
-                          "padding:6px 8px;margin:4px 0;border-radius:4px;")
+            if is_marked:
+                card_bg  = "#e6f4ea"
+                card_bdr = "#34a853"
+            elif is_nearest:
+                card_bg  = "#fef7e0"
+                card_bdr = "#f9ab00"
+            else:
+                card_bg  = "#ffffff"
+                card_bdr = "#dadce0"
 
-            html.append(f'<pre style="{style}">{esc}</pre>')
+            status_color = "#34a853" if r["estado"] == "COMPLETE" else "#888888"
+            tags_html = ""
+            if is_nearest:
+                tags_html += ('<span style="background:#f9ab00;color:#fff;font-size:11px;'
+                              'padding:2px 7px;border-radius:10px;margin-left:6px;">★ PRÓXIMA</span>')
+            if is_marked:
+                tags_html += ('<span style="background:#34a853;color:#fff;font-size:11px;'
+                              'padding:2px 7px;border-radius:10px;margin-left:6px;">🆕 NUEVA</span>')
+
+            bebe_style = "color:#d93025;font-weight:bold;" if s["BEBÉ"] > 0 else ""
+
+            html_parts.append(
+                f'<div style="background:{card_bg};border-left:4px solid {card_bdr};'
+                f'padding:12px 14px;margin-bottom:2px;">'
+            )
+            html_parts.append(
+                f'<div style="font-size:14px;font-weight:bold;margin-bottom:6px;">'
+                f'📋 {_html.escape(r["id"][:8])}… '
+                f'<span style="background:{status_color};color:#fff;font-size:11px;'
+                f'padding:2px 8px;border-radius:10px;font-weight:normal;">'
+                f'{_html.escape(r["estado"])}</span>{tags_html}</div>'
+            )
+            html_parts.append(
+                f'<div style="font-size:14px;margin-bottom:5px;">'
+                f'📅 <b>Entrada:</b> {_html.escape(r["check_in"])} &nbsp;'
+                f'<b>Salida:</b> {_html.escape(r["check_out"])}</div>'
+            )
+            html_parts.append(
+                f'<div style="font-size:14px;margin-bottom:5px;">'
+                f'👥 {r["num_huespedes"]} &nbsp;·&nbsp; '
+                f'🧑 {s["ADULTO"]} &nbsp;·&nbsp; '
+                f'👦 {s["NIÑO"]} &nbsp;·&nbsp; '
+                f'<span style="{bebe_style}">👶 {s["BEBÉ"]}</span></div>'
+            )
+            guest_mb = "6px" if r.get("huespedes") else "0"
+            html_parts.append(
+                f'<div style="font-size:13px;color:#555;margin-bottom:{guest_mb};">'
+                f'👤 {_html.escape(r.get("guest_leader","—"))} &nbsp;·&nbsp; '
+                f'🔖 {_html.escape(r.get("booking_ref","—"))}</div>'
+            )
+            for h in r.get("huespedes", []):
+                em       = TIPO_EMOJI.get(h["tipo"], "?")
+                edad_str = f'{h["edad"]}a' if h.get("edad") is not None else "?"
+                g_style  = "color:#d93025;font-weight:bold;" if h["tipo"] == "BEBÉ" else "color:#333;"
+                html_parts.append(
+                    f'<div style="margin-top:4px;padding:5px 8px;background:rgba(0,0,0,0.04);'
+                    f'border-radius:4px;font-size:13px;{g_style}">'
+                    f'{em} <b>{_html.escape(h["tipo"])}</b> · '
+                    f'{_html.escape(h["nombre"])} · {_html.escape(edad_str)} · '
+                    f'{_html.escape(h["nacionalidad"])}</div>'
+                )
+            html_parts.append('</div>')
 
     if cambios:
-        cb_text = "\n".join(
-            ["", "  " + "─" * 66, "  🔔 CAMBIOS DETECTADOS:"]
-            + [f"     {c}" for c in cambios]
+        html_parts.append(
+            '<div style="background:#e8f0fe;border-left:4px solid #1a73e8;'
+            'padding:12px 14px;margin-top:12px;">'
+            '<div style="font-weight:bold;font-size:14px;margin-bottom:8px;">'
+            '🔔 CAMBIOS DETECTADOS</div>'
         )
-        html.append(
-            f'<pre style="margin:8px 0 0;background:#e8f0fe;padding:6px 8px;'
-            f'border-left:4px solid #1a73e8;">{_html.escape(cb_text)}</pre>'
-        )
-    html.append(f'<pre style="margin:8px 0 0;">{_html.escape(sep)}</pre>')
-    html.append('</body></html>')
-    body_html = "".join(html)
+        for c in cambios:
+            html_parts.append(
+                f'<div style="font-size:13px;padding:3px 0;">{_html.escape(c)}</div>'
+            )
+        html_parts.append('</div>')
+
+    html_parts.append('</div></body></html>')
+    body_html = "".join(html_parts)
 
     msg = EmailMessage()
     subject_tag = f" [{len(cambios)} cambios]" if cambios else ""
