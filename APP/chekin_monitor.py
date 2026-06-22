@@ -976,15 +976,6 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     msg.set_content(body_text)
     msg.add_alternative(body_html, subtype="html")
 
-    # También adjuntar JSON del informe
-    try:
-        msg.add_attachment(
-            json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"),
-            maintype="application", subtype="json",
-            filename="chekin_report.json",
-        )
-    except Exception as e:
-        log.warning(f"No se pudo adjuntar JSON: {e}")
 
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
