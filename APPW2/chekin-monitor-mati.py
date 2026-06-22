@@ -43,7 +43,7 @@ import requests
 import schedule
 from dotenv import load_dotenv
 
-# ── Playwright (importación diferida para mejor gestión de errores) ──────────
+# ── Playwright (importación diferida para mejor gestión de errores) ────────────
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
     PLAYWRIGHT_OK = True
@@ -195,13 +195,13 @@ def get_token_via_browser(email: str, password: str) -> dict:
     with sync_playwright() as pw:
         try:
             browser = pw.chromium.launch(
-                headless=False,
+                headless=HEADLESS,
                 channel="chrome",
                 args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
             )
         except Exception:
             browser = pw.chromium.launch(
-                headless=False,
+                headless=HEADLESS,
                 args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
             )
 
@@ -803,7 +803,7 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
         if best_id:
             nearest_ids.add(best_id)
 
-    # ── Cuerpo texto plano ──────────────────────────────────────────────
+    # ── Cuerpo texto plano ────────────────────────────────────────────────────────
     lines = [sep, f"  CHEKIN.IO  │  {generado}  │  {total} reservas", sep]
     for apt, reservas in apts.items():
         lines.append("")
@@ -830,7 +830,7 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     lines.append(sep)
     body_text = "\n".join(lines)
 
-    # ── Construir HTML responsive para móvil ────────────────────────────
+    # ── Construir HTML responsive para móvil ──────────────────────────────────
     html_parts = [
         '<!DOCTYPE html><html><head>'
         '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
