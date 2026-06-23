@@ -43,7 +43,7 @@ import requests
 import schedule
 from dotenv import load_dotenv
 
-# ── Playwright (importación diferida para mejor gestión de errores) ────────────
+# ── Playwright (importación diferida para mejor gestión de errores) ──────────
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
     PLAYWRIGHT_OK = True
@@ -77,6 +77,7 @@ SMTP_PORT     = 587
 EMAIL_SENDER  = os.getenv("EMAIL_SENDER", "")
 EMAIL_PASS    = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_TO      = "matildelopezcanete@gmail.com"
+ALERT_EMAIL   = "up2malaga+tokenR@gmail.com"   # alertas técnicas (token caducado)
 
 # Umbrales de clasificación por edad (años cumplidos)
 BEBE_MAX = 2     # ≤2   → BEBÉ
@@ -803,7 +804,7 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
         if best_id:
             nearest_ids.add(best_id)
 
-    # ── Cuerpo texto plano ────────────────────────────────────────────────────────
+    # ── Cuerpo texto plano ──────────────────────────────────────────────
     lines = [sep, f"  CHEKIN.IO  │  {generado}  │  {total} reservas", sep]
     for apt, reservas in apts.items():
         lines.append("")
@@ -830,7 +831,7 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     lines.append(sep)
     body_text = "\n".join(lines)
 
-    # ── Construir HTML responsive para móvil ──────────────────────────────────
+    # ── Construir HTML responsive para móvil ────────────────────────────
     html_parts = [
         '<!DOCTYPE html><html><head>'
         '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
@@ -966,26 +967,21 @@ api = ChekinAPIClient()
 
 
 def send_auth_failure_alert(error_msg: str) -> bool:
-    if not (EMAIL_SENDER and EMAIL_PASS and EMAIL_TO):
+    if not (EMAIL_SENDER and EMAIL_PASS and ALERT_EMAIL):
         return False
     import smtplib
     from email.message import EmailMessage
     msg = EmailMessage()
     msg["Subject"] = "⚠️ Chekin Monitor MATI — Token caducado, acción manual"
     msg["From"]    = EMAIL_SENDER
-    msg["To"]      = EMAIL_TO
+    msg["To"]      = ALERT_EMAIL
     body = f"""El monitor no pudo refrescar el token automáticamente.
 
 Error: {error_msg}
 
-ACCIÓN REQUERIDA (en PC LOCAL):
-  1. cd C:\\Users\\pmora\\chekin.com\\APP2
-  2. .env: HEADLESS=false
-  3. del chekin_tokens_mati.json
-  4. python chekin-monitor-mati.py
-  5. Chrome abre, login se completa, tokens guardados.
-  6. scp chekin_tokens_mati.json root@servidor:/opt/app-mati/
-  7. systemctl restart chekin-monitor-mati
+ACCIÓN REQUERIDA:
+  Abre C:\\Users\\pmora\\chekin.com\\refresh\\refresh_token.bat
+  El script abre Chrome, captura el token y lo sube al servidor solo.
 
 Monitor reintentará cada 30 min sin éxito hasta entonces.
 """
@@ -995,7 +991,7 @@ Monitor reintentará cada 30 min sin éxito hasta entonces.
             s.ehlo(); s.starttls()
             s.login(EMAIL_SENDER, EMAIL_PASS.replace(" ", ""))
             s.send_message(msg)
-        log.info(f"📧 Alerta auth enviada a {EMAIL_TO}")
+        log.info(f"📧 Alerta auth enviada a {ALERT_EMAIL}")
         return True
     except Exception as e:
         log.error(f"No pude enviar alerta auth: {e}")
