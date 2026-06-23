@@ -9,7 +9,11 @@ from dotenv import load_dotenv
 
 _HERE = Path(__file__).parent
 load_dotenv(_HERE / ".env")
-load_dotenv(_HERE.parent / "APPW2" / ".env", override=False)
+
+# Try to also load Chekin credentials from APPW2/.env if it exists nearby
+_appw2_env = _HERE.parent / "APPW2" / ".env"
+if _appw2_env.exists():
+    load_dotenv(_appw2_env, override=False)
 
 CHEKIN_EMAIL = os.getenv("CHEKIN_EMAIL", "")
 CHEKIN_PASS  = os.getenv("CHEKIN_PASSWORD", "")
@@ -17,12 +21,12 @@ SERVER_HOST  = os.getenv("SERVER_HOST", "192.168.0.146")
 SERVER_USER  = os.getenv("SERVER_USER", "root")
 SERVER_PASS  = os.getenv("SERVER_PASS", "")
 SERVER_PATH  = os.getenv("SERVER_PATH", "/opt/app-mati/chekin_tokens_mati.json")
-TOKENS_LOCAL = _HERE.parent / "APPW2" / "chekin_tokens_mati.json"
+TOKENS_LOCAL = _HERE / "chekin_tokens_mati.json"  # saved in refresh/ folder
 BASE_API     = "https://a.chekin.io/api/v4"
 LOGIN_URL    = "https://chekin.com/onboarding/login/"
 
 
-def ok(msg):   print(f"    ✅ {msg}")
+def ok(msg):  print(f"    ✅ {msg}")
 def warn(msg): print(f"    ⚠️  {msg}")
 def err(msg):  print(f"    ❌ {msg}")
 
