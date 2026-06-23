@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 _HERE = Path(__file__).parent
 load_dotenv(_HERE / ".env")
 
-# Try to also load Chekin credentials from APPW2/.env if it exists nearby
 _appw2_env = _HERE.parent / "APPW2" / ".env"
 if _appw2_env.exists():
     load_dotenv(_appw2_env, override=False)
@@ -21,7 +20,7 @@ SERVER_HOST  = os.getenv("SERVER_HOST", "192.168.0.146")
 SERVER_USER  = os.getenv("SERVER_USER", "root")
 SERVER_PASS  = os.getenv("SERVER_PASS", "")
 SERVER_PATH  = os.getenv("SERVER_PATH", "/opt/app-mati/chekin_tokens_mati.json")
-TOKENS_LOCAL = _HERE / "chekin_tokens_mati.json"  # saved in refresh/ folder
+TOKENS_LOCAL = _HERE / "chekin_tokens_mati.json"
 BASE_API     = "https://a.chekin.io/api/v4"
 LOGIN_URL    = "https://chekin.com/onboarding/login/"
 
@@ -29,6 +28,18 @@ LOGIN_URL    = "https://chekin.com/onboarding/login/"
 def ok(msg):  print(f"    ✅ {msg}")
 def warn(msg): print(f"    ⚠️  {msg}")
 def err(msg):  print(f"    ❌ {msg}")
+
+
+def dismiss_cookie_popup(page):
+    """Cierra el popup de cookies si aparece."""
+    try:
+        btn = page.locator("button:has-text('Aceptar todo'), button:has-text('Accept all'), button:has-text('Aceptar')")
+        if btn.first.is_visible(timeout=4000):
+            btn.first.click()
+            ok("Popup de cookies cerrado.")
+            page.wait_for_timeout(500)
+    except Exception:
+        pass
 
 
 def capture_token() -> dict:
@@ -76,6 +87,9 @@ def capture_token() -> dict:
         page.on("response", on_response)
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=45_000)
 
+        # Cerrar popup de cookies
+        dismiss_cookie_popup(page)
+
         try:
             page.wait_for_selector("#erf_username", timeout=20_000, state="visible")
         except PWTimeout:
@@ -84,6 +98,8 @@ def capture_token() -> dict:
         print("      Esperando Cloudflare Turnstile...")
         for _ in range(30):
             page.wait_for_timeout(1_000)
+            # Intentar cerrar cookies de nuevo por si apareció después
+            dismiss_cookie_popup(page)
             v = page.evaluate("""() => {
                 const el = document.querySelector(
                   'input[name="cf-turnstile-response"],textarea[name="cf-turnstile-response"]');
@@ -92,6 +108,9 @@ def capture_token() -> dict:
             if v and v > 100:
                 ok("Turnstile completado.")
                 break
+
+        # Cerrar cookies una vez más antes de hacer login
+        dismiss_cookie_popup(page)
 
         try:
             if CHEKIN_EMAIL and CHEKIN_PASS:
