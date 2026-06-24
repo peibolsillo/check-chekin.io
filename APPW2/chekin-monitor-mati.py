@@ -43,7 +43,7 @@ import requests
 import schedule
 from dotenv import load_dotenv
 
-# ── Playwright (importación diferida para mejor gestión de errores) ──────────
+# ── Playwright (importación diferida para mejor gestión de errores) ────────────────
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
     PLAYWRIGHT_OK = True
@@ -404,17 +404,24 @@ class ChekinAPIClient:
                 self._apply_creds(access, refresh, stored_cookies)
                 log.info(f"Usando access_token persistido (expira en {int(exp-now)}s).")
                 return
-            # Si access expirado pero refresh válido, intentar renovar
-            if refresh and jwt_exp(refresh) > now:
+            # Si access expirado, intentar renovar con refresh_token via API
+            # (el refresh_token de Chekin no es JWT, no usar jwt_exp para validarlo)
+            if refresh:
                 renewed = try_refresh(refresh)
                 if renewed:
                     save_tokens(renewed["access_token"], renewed["refresh_token"], stored_cookies)
                     self._apply_creds(renewed["access_token"], renewed["refresh_token"], stored_cookies)
                     return
                 else:
-                    log.info("Refresh falló, requiero login manual.")
+                    log.warning("Refresh token caducado o inválido, se requiere login manual.")
 
-        # 3) Sin tokens válidos → login manual asistido en navegador
+        # 3) En modo headless (servidor) no abrir browser — esperar tokens del bat
+        if HEADLESS:
+            raise RuntimeError(
+                "Token caducado. Ejecuta refresh_token.bat en Windows para renovarlo."
+            )
+
+        # 3b) Con display disponible → login manual asistido en navegador
         creds = get_token_via_browser(EMAIL, PASSWORD)
         save_tokens(creds["access_token"], creds["refresh_token"], creds.get("cookies", []))
         self._apply_creds(creds["access_token"], creds["refresh_token"], creds.get("cookies", []))
@@ -804,7 +811,7 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
         if best_id:
             nearest_ids.add(best_id)
 
-    # ── Cuerpo texto plano ──────────────────────────────────────────────
+    # ── Cuerpo texto plano ────────────────────────────────────────────────────────
     lines = [sep, f"  CHEKIN.IO  │  {generado}  │  {total} reservas", sep]
     for apt, reservas in apts.items():
         lines.append("")
@@ -831,7 +838,7 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     lines.append(sep)
     body_text = "\n".join(lines)
 
-    # ── Construir HTML responsive para móvil ────────────────────────────
+    # ── Construir HTML responsive para móvil ────────────────────────────────────
     html_parts = [
         '<!DOCTYPE html><html><head>'
         '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
@@ -979,7 +986,7 @@ def send_auth_failure_alert(error_msg: str) -> bool:
 
 Error: {error_msg}
 
-ACCIÓN REQUERIDA:
+ACCÍON REQUERIDA:
   Abre C:\\Users\\pmora\\chekin.com\\refresh\\refresh_token.bat
   El script abre Chrome, captura el token y lo sube al servidor solo.
 
