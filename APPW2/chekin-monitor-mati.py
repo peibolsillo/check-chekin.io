@@ -43,7 +43,7 @@ import requests
 import schedule
 from dotenv import load_dotenv
 
-# ── Playwright (importación diferida para mejor gestión de errores) ────────────────
+# ── Playwright (importación diferida para mejor gestión de errores) ──────────
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
     PLAYWRIGHT_OK = True
@@ -133,7 +133,7 @@ def try_refresh(refresh_token: str) -> dict | None:
         return None
     try:
         r = requests.post(
-            f"{BASE_API}/login/refresh/",
+            f"{BASE_API}/token/refresh/",
             json={"refresh": refresh_token},
             headers={
                 "Origin"       : "https://dashboard.chekin.com",
@@ -780,7 +780,8 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
             )
             guest_mb = "6px" if r.get("huespedes") else "0"
             html_parts.append(
-                f'<div style="font-size:13px;color:#555;margin-bottom:{guest_mb};">👤 {_html.escape(r.get("guest_leader","—"))}</div>'
+                f'<div style="font-size:13px;color:#555;margin-bottom:{guest_mb};">'
+                f'👤 {_html.escape(r.get("guest_leader","—"))}</div>'
             )
             for h in r.get("huespedes", []):
                 em       = TIPO_EMOJI.get(h["tipo"], "?")
@@ -840,7 +841,7 @@ def send_auth_failure_alert(error_msg: str) -> bool:
 
 Error: {error_msg}
 
-ACCÍON REQUERIDA:
+ACCIÓN REQUERIDA:
   Ejecuta refresh_token.bat en tu PC Windows.
   El script abre Chrome, captura el token y lo sube al servidor solo.
 
