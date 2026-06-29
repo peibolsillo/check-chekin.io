@@ -59,8 +59,8 @@ EMAIL         = os.getenv("CHEKIN_EMAIL", "")
 PASSWORD      = os.getenv("CHEKIN_PASSWORD", "")
 HEADLESS      = os.getenv("HEADLESS", "true").lower() != "false"  # False = ver el navegador
 BASE_API      = "https://a.chekin.io/api/v4"
-LOGIN_URL     = "https://chekin.com/onboarding/login/"      # WordPress + plugin ERF
-DASHBOARD_URL = "https://dashboard.chekin.com/bookings"     # SPA post-login con JWT en localStorage
+LOGIN_URL     = "https://chekin.com/onboarding/login/"
+DASHBOARD_URL = "https://dashboard.chekin.com/bookings"
 AJAX_URL      = "https://chekin.com/wp-admin/admin-ajax.php"
 STATE_FILE    = "chekin_state_mati.json"
 REPORT_FILE   = "chekin_report_mati.json"
@@ -68,22 +68,18 @@ TOKENS_FILE   = "chekin_tokens_mati.json"
 HISTORY_FILE  = "chekin_history_mati.json"
 INTERVAL_MIN  = 30
 
-# Filtro: solo este apartamento
 TARGET_APT    = "Villa Brisa Beach & Grill House"
 
-# SMTP Gmail — destino fijo Matilde (override .env)
 SMTP_HOST     = "smtp.gmail.com"
 SMTP_PORT     = 587
 EMAIL_SENDER  = os.getenv("EMAIL_SENDER", "")
 EMAIL_PASS    = os.getenv("EMAIL_PASSWORD", "")
-EMAIL_TO      = "matildelopezcanete@gmail.com"
+EMAIL_TO      = os.getenv("EMAIL_TO", "")
+ALERT_EMAIL   = os.getenv("ALERT_EMAIL", "")
 
-# Umbrales de clasificación por edad (años cumplidos)
-BEBE_MAX = 2     # ≤2   → BEBÉ
-NINO_MAX = 15    # 3-15 → NIÑO  |  ≥16 → ADULTO
+BEBE_MAX = 2
+NINO_MAX = 15
 
-# Configuración de Email
-EMAIL_SENDER = os.getenv("EMAIL_SENDER", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER", "")
 
@@ -96,7 +92,7 @@ log = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PASO 1 — Obtener token via Playwright (login web + interceptar red)
+# PASO 1 — Obtener token via Playwright
 # ──────────────────────────────────────────────────────────────────────────────
 def jwt_exp(token: str) -> float:
     """Devuelve timestamp UNIX de expiración del JWT, o 0 si no parseable."""
@@ -113,7 +109,6 @@ def jwt_exp(token: str) -> float:
 
 
 def save_tokens(access_token: str, refresh_token: str | None, cookies: list = None):
-    """Persiste tokens y cookies en chekin_tokens.json."""
     Path(TOKENS_FILE).write_text(json.dumps({
         "access_token":  access_token,
         "refresh_token": refresh_token,
@@ -138,7 +133,7 @@ def try_refresh(refresh_token: str) -> dict | None:
         return None
     try:
         r = requests.post(
-            f"{BASE_API}/login/refresh/",
+            f"{BASE_API}/token/refresh/",
             json={"refresh": refresh_token},
             headers={
                 "Origin"       : "https://dashboard.chekin.com",
@@ -165,43 +160,28 @@ def try_refresh(refresh_token: str) -> dict | None:
 
 
 def get_token_via_browser(email: str, password: str) -> dict:
-    """
-    Flow manual-asistido (HEADLESS=false recomendado):
-
-      1. Abre Chrome visible en https://chekin.com/onboarding/login/
-      2. Usuario hace login manual (Cloudflare/Turnstile/Wordfence: vía humana)
-      3. Script detecta redirect a dashboard.chekin.com/?auth_code=<UUID>
-      4. Intercepta respuesta de /api/v4/login/exchange/ con tokens
-      5. Devuelve access_token + refresh_token + cookies
-    """
     if not PLAYWRIGHT_OK:
         raise RuntimeError(
             "Playwright no está instalado.\n"
             "Ejecuta:  pip install playwright && playwright install chromium"
         )
 
-    # Windows: usa display nativo, no Xvfb
     xvfb_display = None
-
     log.info("=" * 70)
-    log.info("Abriendo Chrome para login en Chekin (Mati).")
-    log.info("INSTRUCCIONES:")
-    log.info("  1. Se abre ventana Chrome.")
-    log.info("  2. Login auto-completa si Cloudflare auto-pasa.")
-    log.info("  3. Ventana se cierra sola tras capturar tokens.")
+    log.info("Abriendo Chrome para login en Chekin.")
     log.info("=" * 70)
     captured = {"access_token": None, "refresh_token": None}
 
     with sync_playwright() as pw:
         try:
             browser = pw.chromium.launch(
-                headless=False,
+                headless=HEADLESS,
                 channel="chrome",
                 args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
             )
         except Exception:
             browser = pw.chromium.launch(
-                headless=False,
+                headless=HEADLESS,
                 args=["--ignore-certificate-errors", "--disable-blink-features=AutomationControlled"],
             )
 
@@ -215,7 +195,6 @@ def get_token_via_browser(email: str, password: str) -> dict:
         )
         page = context.new_page()
 
-        # Interceptar respuesta de login/exchange — captura tokens automáticamente
         def on_response(response):
             if "/api/v4/login/exchange" in response.url and response.status == 200:
                 try:
@@ -228,16 +207,13 @@ def get_token_via_browser(email: str, password: str) -> dict:
                     log.warning(f"Parseando exchange: {e}")
 
         page.on("response", on_response)
-
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=45_000)
 
-        # Esperar a que form se renderice naturalmente (ERF JS attach handlers)
         try:
             page.wait_for_selector("#erf_username", timeout=20_000, state="visible")
         except PWTimeout:
             log.warning("Form login no visible tras 20s, sigo de todas formas.")
 
-        # Auto-aceptar cookies y otros banners modales que bloquean el form
         for sel in [
             "#accept-cookies",
             "button#accept-cookies",
@@ -258,13 +234,12 @@ def get_token_via_browser(email: str, password: str) -> dict:
             except Exception:
                 continue
 
-        # Esperar a que Turnstile (Cloudflare) inyecte su token en el form (hasta 30s)
         log.info("Esperando token Cloudflare Turnstile…")
         turnstile_ok = False
         for _ in range(30):
             page.wait_for_timeout(1_000)
             v = page.evaluate("""() => {
-                const el = document.querySelector('input[name=\"cf-turnstile-response\"], textarea[name=\"cf-turnstile-response\"]');
+                const el = document.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
                 return el ? (el.value || '').length : 0;
             }""")
             if v and v > 100:
@@ -321,7 +296,6 @@ def get_token_via_browser(email: str, password: str) -> dict:
                                 break
                         except Exception as e:
                             log.warning(f"Fallback exchange falló: {e}")
-
             try:
                 cookies = [
                     {"name": c["name"], "value": c["value"],
@@ -331,20 +305,14 @@ def get_token_via_browser(email: str, password: str) -> dict:
             except Exception as e:
                 log.warning(f"No pude copiar cookies: {e}")
         finally:
-            try:
-                context.close()
-            except Exception:
-                pass
-            try:
-                browser.close()
-            except Exception:
-                pass
+            try: context.close()
+            except Exception: pass
+            try: browser.close()
+            except Exception: pass
             log.info("🪟 Navegador cerrado.")
 
     if not captured["access_token"]:
-        raise RuntimeError(
-            "Timeout esperando login manual (5 min). Inténtalo de nuevo."
-        )
+        raise RuntimeError("Timeout esperando login manual (5 min). Inténtalo de nuevo.")
 
     return {
         "access_token":  captured["access_token"],
@@ -354,14 +322,9 @@ def get_token_via_browser(email: str, password: str) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PASO 2 — Cliente API que usa el token capturado
+# PASO 2 — Cliente API
 # ──────────────────────────────────────────────────────────────────────────────
 class ChekinAPIClient:
-    """
-    Usa el token JWT obtenido por Playwright para consultar la API REST.
-    Renueva el token automáticamente cada 55 minutos.
-    """
-
     def __init__(self):
         self.token     = None
         self.token_ts  = 0
@@ -387,33 +350,35 @@ class ChekinAPIClient:
     def ensure_token(self, force: bool = False):
         now = time.time()
 
-        # 1) Cache en memoria: si access_token aún válido (con margen 60s), nada que hacer
         if not force and self.token and (now - self.token_ts) < 3300:
             return
 
-        # 2) Tokens persistidos: cargar y comprobar expiración
         stored = load_tokens()
         if stored and not force:
             access = stored.get("access_token")
             refresh = stored.get("refresh_token")
             stored_cookies = stored.get("cookies", [])
             exp = jwt_exp(access) if access else 0
-            # Si access_token aún válido, usarlo directamente
             if exp - now > 60:
                 self._apply_creds(access, refresh, stored_cookies)
                 log.info(f"Usando access_token persistido (expira en {int(exp-now)}s).")
                 return
-            # Si access expirado pero refresh válido, intentar renovar
-            if refresh and jwt_exp(refresh) > now:
+            # El refresh_token de Chekin no es JWT — intentar siempre si existe
+            if refresh:
                 renewed = try_refresh(refresh)
                 if renewed:
                     save_tokens(renewed["access_token"], renewed["refresh_token"], stored_cookies)
                     self._apply_creds(renewed["access_token"], renewed["refresh_token"], stored_cookies)
                     return
                 else:
-                    log.info("Refresh falló, requiero login manual.")
+                    log.warning("Refresh token caducado o inválido, se requiere login manual.")
 
-        # 3) Sin tokens válidos → login manual asistido en navegador
+        # En modo headless (servidor) no abrir browser — esperar tokens del bat
+        if HEADLESS:
+            raise RuntimeError(
+                "Token caducado. Ejecuta refresh_token.bat en Windows para renovarlo."
+            )
+
         creds = get_token_via_browser(EMAIL, PASSWORD)
         save_tokens(creds["access_token"], creds["refresh_token"], creds.get("cookies", []))
         self._apply_creds(creds["access_token"], creds["refresh_token"], creds.get("cookies", []))
@@ -435,17 +400,14 @@ class ChekinAPIClient:
         self.ensure_token()
         url = f"{BASE_API}/{endpoint.lstrip('/')}"
         r   = self.session.get(url, params=params)
-
         if r.status_code == 401:
             log.warning("Token expirado, renovando…")
             self.ensure_token(force=True)
             r = self.session.get(url, params=params)
-
         r.raise_for_status()
         return r.json()
 
     def paginate(self, endpoint: str, params: dict = None) -> list:
-        """Obtiene todas las páginas de un endpoint paginado."""
         data = self.get(endpoint, params)
         if isinstance(data, list):
             return data
@@ -461,11 +423,9 @@ class ChekinAPIClient:
         return results
 
     def get_reservations(self) -> list:
-        # Endpoint v4: /status/reservations/?ordering=-check_in_date
         return self.paginate("/status/reservations/", params={"ordering": "-check_in_date"})
 
     def get_guests(self, reservation_id: str, guest_group_id: str = "") -> list:
-        # v4: huéspedes registrados están en /guest-groups/{ggid}/guests/
         if guest_group_id:
             try:
                 return self.paginate(f"/guest-groups/{guest_group_id}/guests/")
@@ -474,7 +434,6 @@ class ChekinAPIClient:
         return []
 
     def get_guest_group(self, guest_group_id: str) -> dict:
-        """Devuelve metadatos del grupo: adults, children, known/added counts."""
         if not guest_group_id:
             return {}
         try:
@@ -483,14 +442,12 @@ class ChekinAPIClient:
             return {}
 
     def get_guest_detail(self, guest_id: str) -> dict:
-        """Obtiene el detalle completo de un huésped."""
         try:
             return self.get(f"/guests/{guest_id}/")
         except requests.HTTPError:
             return {}
 
     def get_reservation_detail(self, reservation_id: str) -> dict:
-        """Devuelve detalle completo: leader, phone, source, signup_form_link."""
         try:
             return self.get(f"/reservations/{reservation_id}/")
         except requests.HTTPError:
@@ -509,7 +466,6 @@ class ChekinAPIClient:
 # PASO 3 — Clasificación de huéspedes
 # ──────────────────────────────────────────────────────────────────────────────
 def classify_age(dob_str: str) -> tuple[int | None, str]:
-    """Devuelve (edad_en_años, tipo) donde tipo es BEBÉ/NIÑO/ADULTO/DESCONOCIDO."""
     if not dob_str:
         return None, "DESCONOCIDO"
     try:
@@ -530,16 +486,13 @@ def build_guest(guest: dict) -> dict:
     dob_str = (guest.get("birth_date") or guest.get("date_of_birth")
                or guest.get("birthdate") or "")
     age, tipo = classify_age(dob_str)
-
     name = " ".join(filter(None, [
         guest.get("name") or guest.get("first_name", ""),
         guest.get("surname") or guest.get("last_name", ""),
     ])).strip() or "—"
-
     nationality = (guest.get("nationality") or guest.get("citizenship") or "—")
     statuses    = guest.get("statuses", {})
     reg_status  = statuses.get("data", "?") if isinstance(statuses, dict) else "?"
-
     return {
         "id"          : guest.get("id", ""),
         "nombre"      : name,
@@ -557,7 +510,6 @@ def build_reservation(res: dict, guests_raw: list, group_meta: dict = None,
                       detail: dict = None) -> dict:
     group_meta = group_meta or {}
     detail = detail or {}
-
     apt_name = (
         res.get("housing_display_name")
         or res.get("housing_name")
@@ -565,8 +517,6 @@ def build_reservation(res: dict, guests_raw: list, group_meta: dict = None,
         or "—"
     )
     apt_id = res.get("housing_id") or detail.get("housing_id") or "—"
-
-    # Totales: prioridad → group_meta.known_number_of_guests
     total_guests = group_meta.get("known_number_of_guests", 0)
     registrados  = group_meta.get("added_number_of_guests", 0)
     if not total_guests:
@@ -576,33 +526,24 @@ def build_reservation(res: dict, guests_raw: list, group_meta: dict = None,
                 registrados, total_guests = [int(x) for x in guests_str.split("/")]
             except Exception:
                 pass
-
-    # Clasificación a nivel grupo (sin distinguir bebés sin DOB individual)
     adults_g   = group_meta.get("adults", 0)
     children_g = group_meta.get("children", 0)
-
-    # Huéspedes individuales (si registraron)
     huespedes = [build_guest(g) for g in guests_raw]
     resumen   = {"ADULTO": 0, "NIÑO": 0, "BEBÉ": 0, "DESCONOCIDO": 0}
     for h in huespedes:
         resumen[h["tipo"]] += 1
-    # Si no hay individuales pero sí counts a nivel grupo, usar esos
     if not huespedes and (adults_g or children_g):
         resumen["ADULTO"] = adults_g
         resumen["NIÑO"]   = children_g
-
     check_in_raw  = (res.get("check_in_date") or res.get("check_in")
                      or detail.get("check_in_date") or "")
     check_out_raw = (res.get("check_out_date") or res.get("check_out")
                      or detail.get("check_out_date") or "")
-
-    # Estado: si todos huéspedes registrados → COMPLETE, regardless of subitems
     api_status = res.get("general_status") or detail.get("status") or "—"
     if total_guests > 0 and registrados >= total_guests:
         estado_final = "COMPLETE"
     else:
         estado_final = api_status
-
     return {
         "id"            : res.get("id", ""),
         "apartamento"   : apt_name,
@@ -642,7 +583,6 @@ def save_state(state: dict):
 
 
 def append_history(timestamp: str, changes: list):
-    """Append-only log de cambios para historial / auditoría."""
     history = []
     p = Path(HISTORY_FILE)
     if p.exists():
@@ -660,31 +600,8 @@ def save_report(report: dict):
         json.dump(report, f, ensure_ascii=False, indent=2)
     log.info(f"Informe guardado → '{REPORT_FILE}'")
 
-def send_email(subject: str, body: str):
-    """Envía correo vía SMTP Gmail."""
-    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
-        log.warning("Email no configurado en .env. Saltando envío.")
-        return
-
-    try:
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_SENDER
-        msg["To"] = EMAIL_RECEIVER
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        log.info(f"✅ Correo enviado a {EMAIL_RECEIVER}")
-    except Exception as e:
-        log.error(f"❌ Error enviando correo: {e}")
-
 
 def detect_changes(old: dict, new_list: list) -> tuple[list, set]:
-    """
-    Solo notifica cuando reserva pasa a COMPLETE (todos huéspedes registrados).
-    Devuelve (lista mensajes, set ids con transición).
-    """
     changes = []
     mark_ids = set()
     for r in new_list:
@@ -701,13 +618,12 @@ def detect_changes(old: dict, new_list: list) -> tuple[list, set]:
             mark_ids.add(rid)
     return changes, mark_ids
 
-    return changes
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PASO 5 — Presentación en consola
 # ──────────────────────────────────────────────────────────────────────────────
 TIPO_EMOJI = {"ADULTO": "🧑", "NIÑO": "👦", "BEBÉ": "👶", "DESCONOCIDO": "❓"}
+
 
 def print_report(report: dict):
     sep = "═" * 70
@@ -715,7 +631,6 @@ def print_report(report: dict):
     print(f"  CHEKIN.IO  │  {report['generado_en']}  │  "
           f"{report['total_reservas']} reservas")
     print(sep)
-
     for apt, reservas in report["apartamentos"].items():
         print(f"\n  🏠  {apt}")
         print("  " + "─" * 66)
@@ -733,21 +648,18 @@ def print_report(report: dict):
                 print(f"         {em} {h['tipo']:<12} {h['nombre']:<28} "
                       f"{edad:<5}  {h['nacionalidad']:<4}  "
                       f"[doc:{h['doc_tipo']}]  [reg:{h['registro']}]")
-
     if report["cambios"]:
         print(f"\n  {'─'*66}")
         print("  🔔 CAMBIOS DETECTADOS:")
         for c in report["cambios"]:
             print(f"     {c}")
-
     print(f"\n{sep}\n")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Email summary via SMTP Gmail
+# Email summary
 # ──────────────────────────────────────────────────────────────────────────────
 def _build_reservation_lines(r: dict) -> list:
-    """Devuelve lista líneas (sin escape HTML) para una reserva."""
     s = r["resumen"]
     out = [
         f"  📋 {r['id'][:8]}…  │  "
@@ -758,8 +670,6 @@ def _build_reservation_lines(r: dict) -> list:
         f"       Titular: {r.get('guest_leader','—')}  │  "
         f"Fuente: {r.get('fuente','—')}  │  Ref: {r.get('booking_ref','—')}",
     ]
-    if r.get("signup_link"):
-        out.append(f"       Link form: {r['signup_link']}")
     for h in r.get("huespedes", []):
         em   = TIPO_EMOJI.get(h["tipo"], "?")
         edad = f"{h['edad']}a" if h.get("edad") is not None else "? a"
@@ -770,34 +680,7 @@ def _build_reservation_lines(r: dict) -> list:
     return out
 
 
-def _highlight_block(escaped: str) -> str:
-    """Aplica bebé-rojo + url-link a HTML ya escapado."""
-    escaped = re.sub(
-        r"(https?://[^\s<]+)",
-        r'<a href="\1" style="color:#1a73e8;text-decoration:underline;">\1</a>',
-        escaped,
-    )
-    escaped = re.sub(
-        r"(^.*👶 BEBÉ.*$)",
-        r'<span style="color:#d93025;font-weight:bold;">\1</span>',
-        escaped,
-        flags=re.MULTILINE,
-    )
-    escaped = re.sub(
-        r"(Bebés:\s*)([1-9]\d*)",
-        r'\1<span style="color:#d93025;font-weight:bold;">\2</span>',
-        escaped,
-    )
-    return escaped
-
-
 def send_email_summary(report: dict, mark_ids: set = None) -> bool:
-    """
-    Envía resumen vía SMTP Gmail.
-      mark_ids: ids reservas que dispararon cambio (verde)
-      Reserva más próxima (check_in >= hoy más cercana) → marco amarillo
-      Huéspedes BEBÉ → rojo
-    """
     if not (EMAIL_SENDER and EMAIL_PASS and EMAIL_TO):
         log.warning("📧 Email no configurado (.env). Saltando envío.")
         return False
@@ -813,7 +696,6 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     sep        = "═" * 70
     today_iso  = date.today().isoformat()
 
-    # Reserva más próxima futura POR apartamento
     nearest_ids = set()
     for reservas in apts.values():
         best_id, best_date = None, None
@@ -826,7 +708,6 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
         if best_id:
             nearest_ids.add(best_id)
 
-    # ── Cuerpo texto plano ──────────────────────────────────────────────
     lines = [sep, f"  CHEKIN.IO  │  {generado}  │  {total} reservas", sep]
     for apt, reservas in apts.items():
         lines.append("")
@@ -834,15 +715,11 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
         lines.append("  " + "─" * 66)
         for r in reservas:
             tag = ""
-            if r["id"] in nearest_ids:
-                tag += " ★PRÓXIMA"
-            if r["id"] in mark_ids:
-                tag += " 🆕NUEVA"
+            if r["id"] in nearest_ids: tag += " ★PRÓXIMA"
+            if r["id"] in mark_ids:    tag += " 🆕NUEVA"
             block = _build_reservation_lines(r)
-            if tag:
-                block[0] = block[0] + tag
+            if tag: block[0] = block[0] + tag
             lines.extend(block)
-
     if cambios:
         lines.append("")
         lines.append("  " + "─" * 66)
@@ -853,46 +730,78 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     lines.append(sep)
     body_text = "\n".join(lines)
 
-    # ── Construir HTML bloque-a-bloque para estilar reservas ────────────
-    html = [
-        '<html><body style="margin:0;padding:8px;background:#fff;'
-        'font-family:Consolas,Menlo,monospace;font-size:13px;line-height:1.4;color:#111;">',
-        f'<pre style="margin:0;">{_html.escape(sep)}\n'
-        f'  CHEKIN.IO  │  {_html.escape(generado)}  │  {total} reservas\n'
-        f'{_html.escape(sep)}</pre>',
+    html_parts = [
+        '<!DOCTYPE html><html><head>'
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
+        '</head><body style="margin:0;padding:0;background:#f4f4f4;'
+        'font-family:Arial,Helvetica,sans-serif;color:#222;">'
+        '<div style="max-width:580px;margin:0 auto;padding:8px 4px;">'
     ]
+    html_parts.append(
+        f'<div style="background:#1a73e8;color:#fff;padding:14px 16px;border-radius:8px 8px 0 0;">'
+        f'<div style="font-size:17px;font-weight:bold;">🏨 CHEKIN.IO</div>'
+        f'<div style="font-size:12px;opacity:0.85;margin-top:3px;">{_html.escape(generado)} &nbsp;·&nbsp; {total} reservas</div>'
+        f'</div>'
+    )
     for apt, reservas in apts.items():
-        html.append(
-            f'<pre style="margin:10px 0 0;">\n  🏠  {_html.escape(apt)}\n'
-            f'  {"─"*66}</pre>'
+        html_parts.append(
+            f'<div style="background:#e8f0fe;padding:9px 14px;font-weight:bold;font-size:14px;margin-top:10px;">'
+            f'🏠 {_html.escape(apt)}</div>'
         )
         for r in reservas:
-            block_lines = _build_reservation_lines(r)
-            block_text  = "\n".join(block_lines)
-            esc         = _highlight_block(_html.escape(block_text))
-
-            style = "margin:0;padding:2px 4px;"
-            if r["id"] in mark_ids:
-                style += ("background:#e6f4ea;border-left:4px solid #34a853;"
-                          "padding:6px 8px;margin:4px 0;")
-            elif r["id"] in nearest_ids:
-                style += ("background:#fef7e0;border:2px solid #f9ab00;"
-                          "padding:6px 8px;margin:4px 0;border-radius:4px;")
-
-            html.append(f'<pre style="{style}">{esc}</pre>')
-
+            s = r["resumen"]
+            is_marked  = r["id"] in mark_ids
+            is_nearest = r["id"] in nearest_ids
+            card_bg  = "#e6f4ea" if is_marked else ("#fef7e0" if is_nearest else "#ffffff")
+            card_bdr = "#34a853" if is_marked else ("#f9ab00" if is_nearest else "#dadce0")
+            status_color = "#34a853" if r["estado"] == "COMPLETE" else "#888888"
+            tags_html = ""
+            if is_nearest:
+                tags_html += '<span style="background:#f9ab00;color:#fff;font-size:11px;padding:2px 7px;border-radius:10px;margin-left:6px;">★ PRÓXIMA</span>'
+            if is_marked:
+                tags_html += '<span style="background:#34a853;color:#fff;font-size:11px;padding:2px 7px;border-radius:10px;margin-left:6px;">🆕 NUEVA</span>'
+            bebe_style = "color:#d93025;font-weight:bold;" if s["BEBÉ"] > 0 else ""
+            html_parts.append(
+                f'<div style="background:{card_bg};border-left:4px solid {card_bdr};padding:12px 14px;margin-bottom:2px;">'
+            )
+            portal = r.get("fuente") or "—"
+            html_parts.append(
+                f'<div style="font-size:14px;font-weight:bold;margin-bottom:6px;">'
+                f'📋 {_html.escape(portal)} '
+                f'<span style="background:{status_color};color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:normal;">'
+                f'{_html.escape(r["estado"])}</span>{tags_html}</div>'
+            )
+            html_parts.append(
+                f'<div style="font-size:14px;margin-bottom:5px;">📅 <b>Entrada:</b> {_html.escape(r["check_in"])} &nbsp;<b>Salida:</b> {_html.escape(r["check_out"])}</div>'
+            )
+            html_parts.append(
+                f'<div style="font-size:14px;margin-bottom:5px;">👥 {r["num_huespedes"]} &nbsp;·&nbsp; '
+                f'🧑 {s["ADULTO"]} &nbsp;·&nbsp; 👦 {s["NIÑO"]} &nbsp;·&nbsp; <span style="{bebe_style}">👶 {s["BEBÉ"]}</span></div>'
+            )
+            guest_mb = "6px" if r.get("huespedes") else "0"
+            html_parts.append(
+                f'<div style="font-size:13px;color:#555;margin-bottom:{guest_mb};">'
+                f'👤 {_html.escape(r.get("guest_leader","—"))}</div>'
+            )
+            for h in r.get("huespedes", []):
+                em       = TIPO_EMOJI.get(h["tipo"], "?")
+                edad_str = f'{h["edad"]}a' if h.get("edad") is not None else "?"
+                g_style  = "color:#d93025;font-weight:bold;" if h["tipo"] == "BEBÉ" else "color:#333;"
+                html_parts.append(
+                    f'<div style="margin-top:4px;padding:5px 8px;background:rgba(0,0,0,0.04);border-radius:4px;font-size:13px;{g_style}">'
+                    f'{em} <b>{_html.escape(h["tipo"])}</b> · {_html.escape(h["nombre"])} · {_html.escape(edad_str)} · {_html.escape(h["nacionalidad"])}</div>'
+                )
+            html_parts.append('</div>')
     if cambios:
-        cb_text = "\n".join(
-            ["", "  " + "─" * 66, "  🔔 CAMBIOS DETECTADOS:"]
-            + [f"     {c}" for c in cambios]
+        html_parts.append(
+            '<div style="background:#e8f0fe;border-left:4px solid #1a73e8;padding:12px 14px;margin-top:12px;">'
+            '<div style="font-weight:bold;font-size:14px;margin-bottom:8px;">🔔 CAMBIOS DETECTADOS</div>'
         )
-        html.append(
-            f'<pre style="margin:8px 0 0;background:#e8f0fe;padding:6px 8px;'
-            f'border-left:4px solid #1a73e8;">{_html.escape(cb_text)}</pre>'
-        )
-    html.append(f'<pre style="margin:8px 0 0;">{_html.escape(sep)}</pre>')
-    html.append('</body></html>')
-    body_html = "".join(html)
+        for c in cambios:
+            html_parts.append(f'<div style="font-size:13px;padding:3px 0;">{_html.escape(c)}</div>')
+        html_parts.append('</div>')
+    html_parts.append('</div></body></html>')
+    body_html = "".join(html_parts)
 
     msg = EmailMessage()
     subject_tag = f" [{len(cambios)} cambios]" if cambios else ""
@@ -901,21 +810,9 @@ def send_email_summary(report: dict, mark_ids: set = None) -> bool:
     msg["To"]      = EMAIL_TO
     msg.set_content(body_text)
     msg.add_alternative(body_html, subtype="html")
-
-    # También adjuntar JSON del informe
-    try:
-        msg.add_attachment(
-            json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"),
-            maintype="application", subtype="json",
-            filename="chekin_report.json",
-        )
-    except Exception as e:
-        log.warning(f"No se pudo adjuntar JSON: {e}")
-
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
-            s.ehlo()
-            s.starttls()
+            s.ehlo(); s.starttls()
             s.login(EMAIL_SENDER, EMAIL_PASS.replace(" ", ""))
             s.send_message(msg)
         log.info(f"📧 Email enviado a {EMAIL_TO}")
@@ -932,26 +829,21 @@ api = ChekinAPIClient()
 
 
 def send_auth_failure_alert(error_msg: str) -> bool:
-    if not (EMAIL_SENDER and EMAIL_PASS and EMAIL_TO):
+    if not (EMAIL_SENDER and EMAIL_PASS and ALERT_EMAIL):
         return False
     import smtplib
     from email.message import EmailMessage
     msg = EmailMessage()
     msg["Subject"] = "⚠️ Chekin Monitor MATI — Token caducado, acción manual"
     msg["From"]    = EMAIL_SENDER
-    msg["To"]      = EMAIL_TO
+    msg["To"]      = ALERT_EMAIL
     body = f"""El monitor no pudo refrescar el token automáticamente.
 
 Error: {error_msg}
 
-ACCIÓN REQUERIDA (en PC LOCAL):
-  1. cd C:\\Users\\pmora\\chekin.com\\APP2
-  2. .env: HEADLESS=false
-  3. del chekin_tokens_mati.json
-  4. python chekin-monitor-mati.py
-  5. Chrome abre, login se completa, tokens guardados.
-  6. scp chekin_tokens_mati.json root@servidor:/opt/app-mati/
-  7. systemctl restart chekin-monitor-mati
+ACCIÓN REQUERIDA:
+  Ejecuta refresh_token.bat en tu PC Windows.
+  El script abre Chrome, captura el token y lo sube al servidor solo.
 
 Monitor reintentará cada 30 min sin éxito hasta entonces.
 """
@@ -961,7 +853,7 @@ Monitor reintentará cada 30 min sin éxito hasta entonces.
             s.ehlo(); s.starttls()
             s.login(EMAIL_SENDER, EMAIL_PASS.replace(" ", ""))
             s.send_message(msg)
-        log.info(f"📧 Alerta auth enviada a {EMAIL_TO}")
+        log.info(f"📧 Alerta auth enviada a {ALERT_EMAIL}")
         return True
     except Exception as e:
         log.error(f"No pude enviar alerta auth: {e}")
@@ -976,7 +868,6 @@ def run_check():
     log.info("─" * 50)
     log.info("Iniciando consulta…")
     old_state = load_state()
-
     try:
         raw_reservations = api.get_reservations()
         total_global = len(raw_reservations)
@@ -986,17 +877,13 @@ def run_check():
             or TARGET_APT in (r.get("housing_name", "") or "")
         ]
         log.info(f"  → {len(raw_reservations)}/{total_global} reservas (filtro: {TARGET_APT}).")
-
         processed = []
         for idx, res in enumerate(raw_reservations, 1):
             rid = res.get("id", "")
-            log.info(f"  [{idx}/{len(raw_reservations)}] Obteniendo huéspedes de "
-                     f"{rid[:8]}…")
-            ggid       = res.get("guest_group_id", "") or ""
+            log.info(f"  [{idx}/{len(raw_reservations)}] Obteniendo huéspedes de {rid[:8]}…")
+            ggid           = res.get("guest_group_id", "") or ""
             guests_summary = api.get_guests(rid, ggid)
-
-            # Enriquecer huéspedes con detalles individuales si existen
-            guests_full = []
+            guests_full    = []
             for gs in guests_summary:
                 gid = gs.get("id")
                 if gid:
@@ -1004,40 +891,32 @@ def run_check():
                     if detail:
                         guests_full.append(detail)
                         continue
-                guests_full.append(gs) # fallback al summary si falla el detalle
-
+                guests_full.append(gs)
             group_meta = api.get_guest_group(ggid)
             detail     = api.get_reservation_detail(rid)
             processed.append(build_reservation(res, guests_full, group_meta, detail))
-
         changes, mark_ids = detect_changes(old_state, processed)
         new_state = {r["id"]: r for r in processed}
-
-        # Agrupar por apartamento y ordenar por check_in
         apts: dict[str, list] = {}
         for r in processed:
             apts.setdefault(r["apartamento"], []).append(r)
         for apt in apts:
             apts[apt].sort(key=lambda x: x["check_in"])
-
         report = {
             "generado_en"   : datetime.now().isoformat(timespec="seconds"),
             "total_reservas": len(processed),
             "cambios"       : changes,
             "apartamentos"  : apts,
         }
-
         save_state(new_state)
         save_report(report)
         print_report(report)
-
         if changes:
             log.info(f"  🔔 {len(changes)} cambio(s) detectado(s).")
             append_history(report["generado_en"], changes)
             send_email_summary(report, mark_ids=mark_ids)
         else:
             log.info("  ✅ Sin cambios desde la consulta anterior. Email omitido.")
-
     except Exception as e:
         log.exception(f"Error en la consulta: {e}")
         msg = str(e).lower()
@@ -1065,10 +944,8 @@ if __name__ == "__main__":
     log.info(f"  Informe    : {REPORT_FILE}")
     log.info(f"  Navegador  : {'headless' if HEADLESS else 'VISIBLE (depuración)'}")
 
-    # Primera ejecución inmediata
     run_check()
 
-    # Programar siguientes
     schedule.every(INTERVAL_MIN).minutes.do(run_check)
     log.info(f"Próxima consulta en {INTERVAL_MIN} min. Ctrl+C para salir.\n")
 
